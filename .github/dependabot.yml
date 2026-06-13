@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: mirror
+    # Hold every refresh back 7 days so a freshly-published (possibly poisoned)
+    # upstream digest has time to be caught/yanked before we mirror it. This is
+    # the supply-chain gate; podman-auto-update on noema then pulls the soaked
+    # digest with no further delay.
+    cooldown:
+      default-days: 7
+    # Stay on the pinned tag (:v3 / :3.4 / :latest) and only refresh its digest.
+    # Tag/version bumps (traefik v3->v4, couchdb 3.4->3.5) are deliberately
+    # manual — ignoring all semver update-types leaves only digest-only updates.
+    # NB confirm on the first cycle that this does NOT also suppress the digest
+    # refresh (digest updates are classified separately from semver-*).
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch

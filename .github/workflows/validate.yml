@@ -1,0 +1,29 @@
+name: validate
+
+# PR gate: every pinned digest must actually resolve upstream before we let a
+# bump merge. Cheap, and it's the required status check that gates auto-merge.
+
+on:
+  pull_request:
+    paths: [Dockerfile]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+
+      - name: Every pinned digest must resolve upstream
+        run: |
+          set -euo pipefail
+          grep '^FROM ' Dockerfile | while read -r _ ref _ name; do
+            src_repo="${ref%@*}"; digest="${ref#*@}"; src_norepo="${src_repo%:*}"
+            echo "checking ${name}: ${src_norepo}@${digest}"
+            skopeo inspect --raw "docker://${src_norepo}@${digest}" >/dev/null
+          done
