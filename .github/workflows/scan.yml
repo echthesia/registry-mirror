@@ -1,0 +1,118 @@
+name: cve-scan
+
+# Alert-only CVE scan of the *currently pinned* (deployed) images. Trivy reports
+# only HIGH/CRITICAL vulnerabilities that have a fix available (--ignore-unfixed)
+# — i.e. "a newer upstream digest would patch a serious CVE in what noema runs."
+# Findings are surfaced as a single tracking issue (created/refreshed/closed), so
+# it never spams. This does NOT auto-deploy: bypassing the cooldown for a fix is
+# a deliberate human call — see the README "Urgent patches" runbook.
+
+on:
+  schedule:
+    - cron: "0 13 * * *"   # daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cve-scan
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install trivy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release download --repo aquasecurity/trivy \
+            --pattern 'trivy_*_Linux-64bit.tar.gz' --dir /tmp/trivy
+          tar -xzf /tmp/trivy/trivy_*_Linux-64bit.tar.gz -C /tmp/trivy
+          sudo install /tmp/trivy/trivy /usr/local/bin/trivy
+          trivy --version
+
+      - name: Scan each pinned digest
+        run: |
+          set -euo pipefail
+          while read -r _ ref _ name; do
+            src_repo="${ref%@*}"; digest="${ref#*@}"; src_norepo="${src_repo%:*}"
+            echo "::group::scan ${name} (${src_norepo}@${digest})"
+            trivy image --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+              --format json --output "/tmp/scan-${name}.json" "${src_norepo}@${digest}"
+            echo "::endgroup::"
+          done < <(grep '^FROM ' Dockerfile)
+
+      - name: Build report
+        id: report
+        run: |
+          python3 - <<'PY'
+          import json, os, datetime
+          imgs = []
+          for line in open("Dockerfile"):
+              if line.startswith("FROM "):
+                  p = line.split()
+                  ref, name = p[1], p[3]
+                  tag = ref.split("@")[0].split(":")[-1]
+                  imgs.append((name, tag))
+          total, sections = 0, []
+          for name, tag in imgs:
+              data = json.load(open(f"/tmp/scan-{name}.json"))
+              seen, uniq = set(), []
+              for r in data.get("Results") or []:
+                  for v in r.get("Vulnerabilities") or []:
+                      k = (v.get("VulnerabilityID"), v.get("PkgName"), v.get("InstalledVersion"))
+                      if k in seen:
+                          continue
+                      seen.add(k); uniq.append(v)
+              total += len(uniq)
+              if uniq:
+                  rows = ["| CVE | Severity | Package | Installed | Fixed |", "|---|---|---|---|---|"]
+                  for v in sorted(uniq, key=lambda v: (v.get("Severity", ""), v.get("PkgName", "")))[:50]:
+                      rows.append(f"| `{v.get('VulnerabilityID')}` | {v.get('Severity')} | "
+                                  f"`{v.get('PkgName')}` | {v.get('InstalledVersion')} | {v.get('FixedVersion')} |")
+                  extra = "" if len(uniq) <= 50 else f"\n\n_…and {len(uniq) - 50} more._"
+                  sections.append(f"### {name} `{tag}` — {len(uniq)} fixable\n" + "\n".join(rows) + extra)
+          ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%MZ")
+          if total:
+              body = (f"Trivy found **{total}** fixable HIGH/CRITICAL CVE(s) in the currently-pinned "
+                      "(deployed) images. A newer upstream digest fixes these — they patch automatically "
+                      "as the 7-day cooldown releases each refresh, or fast-track now per the README "
+                      "*Urgent patches* runbook.\n\n" + "\n\n".join(sections))
+          else:
+              body = "No fixable HIGH/CRITICAL CVEs in the currently-pinned images. \U0001F389"
+          body += f"\n\n_Scanned {ts} · trivy · HIGH,CRITICAL · --ignore-unfixed · re-runs daily._"
+          open("/tmp/body.md", "w").write(body)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"total={total}\n")
+          PY
+
+      - name: Open / refresh / close tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOTAL: ${{ steps.report.outputs.total }}
+        run: |
+          set -euo pipefail
+          gh label create cve-scan --color FBCA04 \
+            --description "Automated CVE scan of deployed images" 2>/dev/null || true
+          title="CVE scan: fixable HIGH/CRITICAL in deployed images"
+          num=$(gh issue list --label cve-scan --state open --json number -q '.[0].number' 2>/dev/null || true)
+          if [ "${TOTAL}" -gt 0 ]; then
+            if [ -n "${num}" ]; then
+              gh issue edit "${num}" --body-file /tmp/body.md
+              echo "refreshed issue #${num}"
+            else
+              gh issue create --label cve-scan --title "${title}" --body-file /tmp/body.md
+            fi
+          else
+            if [ -n "${num}" ]; then
+              gh issue comment "${num}" --body-file /tmp/body.md
+              gh issue close "${num}" --reason completed
+              echo "closed issue #${num} (clean)"
+            fi
+          fi
