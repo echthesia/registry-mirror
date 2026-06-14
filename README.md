@@ -51,3 +51,23 @@ noema unit: Image=ghcr.io/echthesia/traefik:v3  +  AutoUpdate=registry
 
 Residual: a compromise of this repo's CI could push a bad image to GHCR that noema
 would pull — but confined to the container's own privilege, never root.
+
+## Urgent patches (bypassing the cooldown)
+
+The 7-day cooldown delays *every* refresh, including a security fix. Dependabot's
+own "skip the cooldown for security updates" does **not** help here: container
+images aren't in the GitHub Advisory Database (a container's CVEs live in the OS
+packages *inside* the image, which Dependabot can't see), so it never classifies
+a Docker bump as a security update.
+
+When you know of a fix and want it now, bypass the cooldown by hand — it only
+gates Dependabot's *automatic* proposals, not a deliberate pin change:
+
+1. Get the patched upstream digest, e.g.
+   `skopeo inspect docker://docker.io/library/traefik:v3` (or read upstream's
+   release/advisory).
+2. Edit that `FROM` digest in `Dockerfile` and push to `main` — a repo admin
+   bypasses branch protection; or open a PR and `validate` confirms it resolves.
+   `mirror.yml` copies it to `ghcr.io/echthesia/*` immediately.
+3. On noema, pull now instead of waiting for the nightly `podman-auto-update.timer`:
+   `sudo podman auto-update` (healthcheck rollback still applies).
