@@ -13,7 +13,7 @@
 # onto the mirror is a no-op. Never `docker build` this file.
 
 FROM docker.io/library/traefik:v3@sha256:d6858791f9e74df44ca4014166647c41cdc2abd3bf2a71b832ca4e1c6a91b257 AS traefik
-FROM docker.io/library/couchdb:3.4@sha256:4e84d4f460b104f890a3f55c655bfcedf0674bf8a0fe57029d13982134411ece AS couchdb
+FROM docker.io/library/couchdb:3.4@sha256:af9d39a66d53cbf1cfe53ff20fb093e426f7c09a90d15585e13b028d490a7f08 AS couchdb
 FROM ghcr.io/tecnativa/docker-socket-proxy:latest@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476 AS docker-socket-proxy
 
 # Consumer: echthesia/infra (Quadlet units pull ghcr.io/echthesia/* with AutoUpdate=registry).
