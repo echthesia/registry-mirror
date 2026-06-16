@@ -5,9 +5,13 @@
 #
 # Flow: Dependabot opens a same-tag digest-refresh PR when an upstream digest
 # drifts (GA, because the digest is already pinned — no experiment needed), held
-# back 7 days by the cooldown in .github/dependabot.yml. On merge,
-# .github/workflows/mirror.yml `skopeo copy --all`s the merged digest to GHCR.
-# The `AS <name>` is the destination image name (ghcr.io/echthesia/<name>:<tag>).
+# back 7 days by the cooldown in .github/dependabot.yml. When the required
+# `validate` check passes the PR auto-merges, and .github/workflows/mirror.yml
+# (triggered via workflow_run on validate) `skopeo copy --all`s the merged digest
+# to GHCR. NB it triggers on validate, not on the merge push: an auto-merge push
+# is made with GITHUB_TOKEN, which by GitHub's anti-recursion rule does not fire
+# push-triggered workflows. The `AS <name>` is the destination image name
+# (ghcr.io/echthesia/<name>:<tag>).
 #
 # Pinned at the live noema digests as of 2026-06-13, so flipping the noema units
 # onto the mirror is a no-op. Never `docker build` this file.

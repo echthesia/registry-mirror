@@ -1,11 +1,26 @@
 name: mirror
 
 # Copy each digest-pinned upstream image to ghcr.io/echthesia/<name>:<tag>.
-# Runs after a (Dependabot, soaked) digest bump merges to main, and on demand.
 # Copies BY DIGEST (not by tag) so what we publish is exactly what was reviewed
 # and soaked — no TOCTOU where upstream :tag moves between merge and copy.
+#
+# Triggers:
+#  - workflow_run after `validate`: when a soaked Dependabot digest bump auto-
+#    merges, the merge push to main is made with GITHUB_TOKEN, which — by GitHub's
+#    anti-recursion rule — does NOT fire the `push` trigger below (this silently
+#    left GHCR stale once already). `validate` is the required check that gates
+#    auto-merge, so chaining off its completion is our reliable post-merge signal.
+#    Bonus: a workflow_run run gets a normal token with packages:write, unlike a
+#    Dependabot-triggered run (which would be read-only). We check out main, so we
+#    only ever publish merged state; runner-provisioning latency covers the brief
+#    window between validate passing and the merge commit landing.
+#  - push to main touching Dockerfile: covers human (non-token) commits.
+#  - workflow_dispatch: manual / catch-up.
 
 on:
+  workflow_run:
+    workflows: [validate]
+    types: [completed]
   push:
     branches: [main]
     paths: [Dockerfile]
@@ -21,9 +36,14 @@ concurrency:
 
 jobs:
   mirror:
+    # On workflow_run, only proceed if validate succeeded — a failed validate means
+    # the bump won't merge, so there's nothing new to publish. push/dispatch always run.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: main   # always publish merged main state, never a PR head
 
       - name: Install skopeo
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
