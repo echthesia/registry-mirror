@@ -2,11 +2,7 @@
 
 Re-publishes a few third-party container images to `ghcr.io/echthesia/*` so that
 [noema](https://github.com/echthesia/infra)'s Quadlet stack can pull them with
-`AutoUpdate=registry` **behind a supply-chain cooldown** — getting hands-off
-image deploys without auto-pulling a freshly-poisoned upstream image at day zero.
-
-This repo holds only public image references and a copy workflow. It contains
-nothing sensitive.
+`AutoUpdate=registry` behind a supply-chain cooldown.
 
 ## How it works
 
@@ -31,43 +27,6 @@ noema unit: Image=ghcr.io/echthesia/traefik:v3  +  AutoUpdate=registry
   `ignore`s all semver tag bumps so the mirror stays on the pinned tag and only
   refreshes its digest; tag/major upgrades (e.g. traefik `v3 → v4`) are manual.
 - **`mirror.yml`** — on a merge to `main`, `skopeo copy --all` each pinned digest
-  to `ghcr.io/echthesia/<name>:<tag>`. Copies **by digest**, never by tag, so what
-  ships is exactly what was soaked (no TOCTOU). Pushes with `GITHUB_TOKEN`.
-- **`validate.yml`** — PR check: every pinned digest must resolve upstream. The
-  required check that gates auto-merge.
-- **`automerge.yml`** — enables auto-merge on Dependabot's PRs; the required
-  check + the cooldown are the gates.
-
-## Trust model
-
-- The **7-day cooldown** is the supply-chain gate — it replaces a human reviewer
-  (who can't meaningfully inspect a digest hash anyway), letting most compromised
-  upstream images be caught and yanked before we mirror them.
-- **`AutoUpdate=registry`** on noema is the constrained deploy primitive: it swaps
-  the digest of the *same* image and rolls back on healthcheck failure; it cannot
-  escalate privilege or change mounts/caps/image-name — so this is **not** a root
-  code-execution path.
-- Everything here runs on the built-in `GITHUB_TOKEN` — no PAT, no app, no runner.
-
-Residual: a compromise of this repo's CI could push a bad image to GHCR that noema
-would pull — but confined to the container's own privilege, never root.
-
-## Urgent patches (bypassing the cooldown)
-
-The 7-day cooldown delays *every* refresh, including a security fix. Dependabot's
-own "skip the cooldown for security updates" does **not** help here: container
-images aren't in the GitHub Advisory Database (a container's CVEs live in the OS
-packages *inside* the image, which Dependabot can't see), so it never classifies
-a Docker bump as a security update.
-
-When you know of a fix and want it now, bypass the cooldown by hand — it only
-gates Dependabot's *automatic* proposals, not a deliberate pin change:
-
-1. Get the patched upstream digest, e.g.
-   `skopeo inspect docker://docker.io/library/traefik:v3` (or read upstream's
-   release/advisory).
-2. Edit that `FROM` digest in `Dockerfile` and push to `main` — a repo admin
-   bypasses branch protection; or open a PR and `validate` confirms it resolves.
-   `mirror.yml` copies it to `ghcr.io/echthesia/*` immediately.
-3. On noema, pull now instead of waiting for the nightly `podman-auto-update.timer`:
-   `sudo podman auto-update` (healthcheck rollback still applies).
+  to `ghcr.io/echthesia/<name>:<tag>`. Pushes with `GITHUB_TOKEN`.
+- **`validate.yml`** — PR check: every pinned digest must resolve upstream.
+- **`automerge.yml`** — enables auto-merge on Dependabot's PRs.
