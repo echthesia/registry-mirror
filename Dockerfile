@@ -17,7 +17,7 @@
 # onto the mirror is a no-op. Never `docker build` this file.
 
 FROM docker.io/library/traefik:v3@sha256:6608e0f4b12983a2e9874f5dac86105bd449b59067b6806350a030216aebf393 AS traefik
-FROM docker.io/library/couchdb:3.4@sha256:b1d84a34afba114d6e9f4fe3fad210e60eaaadab8fd9cd1d218d7d2cad663874 AS couchdb
+FROM docker.io/library/couchdb:3.4@sha256:d603d4086836b1e20f1ec35d2d38e49359639c2eb56a54c8ba0ddbdff0f3dabe AS couchdb
 FROM ghcr.io/tecnativa/docker-socket-proxy:latest@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476 AS docker-socket-proxy
 FROM docker.io/restic/rest-server:latest@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5 AS rest-server
 # Pinned one release behind (1.74.3) on purpose: the 1.74.4 digest was 5 days
