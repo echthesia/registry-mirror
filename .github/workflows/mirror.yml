@@ -48,16 +48,33 @@ jobs:
       - name: Install skopeo
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Log in to GHCR
         run: |
           printf '%s' "${{ secrets.GITHUB_TOKEN }}" \
             | skopeo login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+          # cosign reads ~/.docker/config.json, not skopeo's auth file
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" \
+            | cosign login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
 
-      - name: Copy pinned digests to ghcr.io/echthesia
+      # After each copy, re-sign the (verbatim-preserved) digest with the shared
+      # echthesia signing key: noema's policy.json (echthesia/infra) rejects
+      # unsigned ghcr.io/echthesia/* pulls, so an unsigned mirror copy would
+      # never deploy. The signature attests "this digest went through the
+      # Dependabot cooldown + validate pipeline" — nothing about upstream.
+      # verify-before-sign keeps re-runs (dispatch, catch-up) from stacking
+      # duplicate signatures onto an already-signed digest.
+      - name: Copy pinned digests to ghcr.io/echthesia and sign them
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
           owner="${{ github.repository_owner }}"
           owner="${owner,,}"   # GHCR paths must be lowercase
+          cosign public-key --key env://COSIGN_PRIVATE_KEY --outfile /tmp/cosign.pub
           grep '^FROM ' Dockerfile | while read -r _ ref _ name; do
             src_repo="${ref%@*}"          # docker.io/library/traefik:v3
             digest="${ref#*@}"            # sha256:...
@@ -67,5 +84,12 @@ jobs:
             echo "::group::${name}  ${src_norepo}@${digest} -> ${dest}"
             skopeo copy --all --retry-times 3 \
               "docker://${src_norepo}@${digest}" "docker://${dest}"
+            if cosign verify --key /tmp/cosign.pub \
+                "ghcr.io/${owner}/${name}@${digest}" >/dev/null 2>&1; then
+              echo "already signed, skipping"
+            else
+              cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
+                "ghcr.io/${owner}/${name}@${digest}"
+            fi
             echo "::endgroup::"
           done

@@ -30,3 +30,15 @@ noema unit: Image=ghcr.io/echthesia/traefik:v3  +  AutoUpdate=registry
   to `ghcr.io/echthesia/<name>:<tag>`. Pushes with `GITHUB_TOKEN`.
 - **`validate.yml`** — PR check: every pinned digest must resolve upstream.
 - **`automerge.yml`** — enables auto-merge on Dependabot's PRs.
+- **`scan.yml`** — daily alert-only trivy scan of the pinned (deployed) digests;
+  maintains a single tracking issue for fixable HIGH/CRITICAL CVEs.
+
+## Signing
+
+After each copy, `mirror.yml` signs the mirrored digest with the shared
+echthesia cosign key (`COSIGN_PRIVATE_KEY` / `COSIGN_PASSWORD` Actions
+secrets; archival copy in the infra repo's `secrets/cosign.sops.yaml`). noema's
+`/etc/containers/policy.json` (echthesia/infra, `roles/quadlet`) rejects
+unsigned `ghcr.io/echthesia/*` pulls, so the signature is what marks a digest
+as "went through this pipeline" — it says nothing about upstream provenance
+beyond the digest pin itself. Re-runs skip digests already signed by our key.
