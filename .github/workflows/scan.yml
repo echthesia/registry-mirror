@@ -21,12 +21,11 @@ on:
     - cron: "0 13 * * *"   # daily
   workflow_dispatch:
 
+# Branch pushes and PR operations use MIRROR_PR_PAT (see the override step),
+# so GITHUB_TOKEN keeps read-only repo access.
 permissions:
-  contents: write         # push the override branch
+  contents: read
   issues: write
-  pull-requests: write    # open the override PR + enable auto-merge
-  actions: write          # dispatch validate (GITHUB_TOKEN-created PRs don't
-                          # fire pull_request workflows) and mirror
 
 concurrency:
   group: cve-scan
@@ -132,19 +131,22 @@ jobs:
           PY
 
       # One PR per image, auto-merged behind the required validate check.
-      # validate must be dispatched explicitly: a PR created with GITHUB_TOKEN
-      # never fires pull_request workflows (anti-recursion), which would leave
-      # the required check "Expected" forever. After a merge, dispatch mirror
-      # explicitly too — the workflow_run(validate) trigger can lose the race
-      # against the merge commit and publish pre-merge main.
+      # Authored with MIRROR_PR_PAT (fine-grained: this repo only, Contents +
+      # Pull requests RW) instead of GITHUB_TOKEN: a PR created by a
+      # workflow's own token never fires pull_request workflows (recursion
+      # guard), which parks the required check in action_required awaiting a
+      # manual approval click. A user-token PR triggers validate normally,
+      # and its auto-merge push fires mirror.yml's push trigger directly —
+      # no dispatch hack, no workflow_run race. If this step fails with an
+      # auth error, the PAT has expired: mint a new one (see README).
       - name: Open override PRs
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.MIRROR_PR_PAT }}
         run: |
           set -euo pipefail
-          merged_any=0
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          push_url="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           while read -r row; do
             name=$(jq -r .name <<<"$row"); tag=$(jq -r .tag <<<"$row")
             old=$(jq -r .old <<<"$row");   new=$(jq -r .new <<<"$row")
@@ -152,9 +154,10 @@ jobs:
             branch="security-override/${name}"
             existing=$(gh pr list --head "$branch" --state open --json number -q '.[0].number' || true)
             if [ -n "$existing" ]; then
-              # Re-nudge a stuck PR: re-dispatch validate on its head.
-              echo "PR #${existing} already open for ${name}; re-dispatching validate"
-              gh workflow run validate.yml --ref "$branch"
+              # validate runs on its own for PAT-authored PRs; an override PR
+              # still open a day later means its check failed or merge is
+              # blocked — surface, don't recreate.
+              echo "PR #${existing} already open for ${name}; leaving it alone"
               continue
             fi
             git checkout -B "$branch" origin/main
@@ -162,25 +165,14 @@ jobs:
             git commit -a \
               -m "mirror: security override — bump ${name} to ${new:0:19}" \
               -m "Fixes fixable HIGH/CRITICAL CVE(s) in the deployed digest: ${cves}. Opened by cve-scan ahead of the Dependabot cooldown (candidate is >=24h old); merges only once the required validate check passes."
-            git push -f origin "$branch"
+            git push -f "$push_url" "$branch"
             pr=$(gh pr create --base main --head "$branch" \
               --title "security override: ${name} (${cves})" \
               --body "The deployed \`${name}:${tag}\` digest has fixable HIGH/CRITICAL CVE(s) — ${cves} — fixed by the upstream candidate digest \`${new}\` (>=24h old). Same-tag digest bump, auto-merged behind \`validate\` per the README *Urgent patches* runbook." \
               | grep -o '[0-9]*$')
             gh pr merge --auto --squash "$pr"
-            gh workflow run validate.yml --ref "$branch"
-            # Wait for the auto-merge (validate normally takes <2 min).
-            for _ in $(seq 1 30); do
-              state=$(gh pr view "$pr" --json state -q .state)
-              [ "$state" = "MERGED" ] && { merged_any=1; break; }
-              [ "$state" = "CLOSED" ] && break
-              sleep 20
-            done
-            echo "PR #${pr} (${name}): $(gh pr view "$pr" --json state -q .state)"
+            echo "PR #${pr} (${name}) opened; validate + auto-merge + mirror publish proceed on their own"
           done < <(jq -c '.[]' /tmp/overrides.json)
-          if [ "$merged_any" = 1 ]; then
-            gh workflow run mirror.yml --ref main
-          fi
           # Later steps read the Dockerfile — put back main's copy, not the
           # last override branch's.
           git checkout --detach origin/main

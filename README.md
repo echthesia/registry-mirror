@@ -48,13 +48,18 @@ around it when the deployed digest has a serious fixable CVE:
   offer for docker digest pins. Notification lands in the tracking issue; a
   Buzzer push is planned once noema's 443/edge gates reopen (senders outside
   the tailnet can't reach the relay today).
-  One human click per override PR: GitHub holds workflow runs on
-  bot-authored PRs for approval ("Approve and run" on the PR page, or
-  `gh api -X POST repos/…/actions/runs/<id>/approve`) — the required
-  `validate` check only counts once its pull_request run passes; auto-merge
-  then lands it and the `workflow_run` mirror publishes + signs. (First
-  exercised for real 2026-08-01: docker-socket-proxy, 11 fixable
-  HIGH/CRITICALs, detected→deployed in ~10 minutes.)
+  Override PRs are authored with the **`MIRROR_PR_PAT`** Actions secret (a
+  fine-grained PAT: this repo only, Contents + Pull requests read/write) —
+  a PR made with the workflow's own `GITHUB_TOKEN` would never fire the
+  required `validate` check (recursion guard) and would sit waiting for a
+  manual "Approve and run" click. With the PAT, validate runs on its own,
+  auto-merge lands the bump, and the merge push fires `mirror.yml`
+  directly. **When the PAT expires** the override step fails with an auth
+  error: mint a replacement (fine-grained, `registry-mirror` only,
+  Contents + Pull requests RW) and `gh secret set MIRROR_PR_PAT -R
+  echthesia/registry-mirror`. (First exercised for real 2026-08-01:
+  docker-socket-proxy, 11 fixable HIGH/CRITICALs, detected→deployed in
+  ~10 minutes.)
 - **Manual fast-track**: edit the `FROM` pin to the fixed digest yourself, PR,
   merge on green `validate` — `mirror.yml` publishes on merge. Useful when the
   fix matters but trivy can't see it (e.g. not in the vuln DB yet) or you
