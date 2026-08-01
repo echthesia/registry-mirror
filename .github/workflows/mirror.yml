@@ -84,11 +84,18 @@ jobs:
             echo "::group::${name}  ${src_norepo}@${digest} -> ${dest}"
             skopeo copy --all --retry-times 3 \
               "docker://${src_norepo}@${digest}" "docker://${dest}"
+            # c/image verifies the signature on the per-platform manifest a
+            # pull actually resolves to, NOT on the index — so the skip check
+            # must look at the amd64 child (noema is x86_64), and signing must
+            # be --recursive (index + every child). An index-only signature
+            # reads as "no signature exists" at pull time.
+            arch_digest=$(skopeo inspect --raw "docker://ghcr.io/${owner}/${name}@${digest}" \
+              | jq -r '[.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux")][0].digest // empty')
             if cosign verify --key /tmp/cosign.pub \
-                "ghcr.io/${owner}/${name}@${digest}" >/dev/null 2>&1; then
+                "ghcr.io/${owner}/${name}@${arch_digest:-$digest}" >/dev/null 2>&1; then
               echo "already signed, skipping"
             else
-              cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
+              cosign sign --yes --recursive --key env://COSIGN_PRIVATE_KEY \
                 "ghcr.io/${owner}/${name}@${digest}"
             fi
             echo "::endgroup::"
