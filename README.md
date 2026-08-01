@@ -48,6 +48,13 @@ around it when the deployed digest has a serious fixable CVE:
   offer for docker digest pins. Notification lands in the tracking issue; a
   Buzzer push is planned once noema's 443/edge gates reopen (senders outside
   the tailnet can't reach the relay today).
+  One human click per override PR: GitHub holds workflow runs on
+  bot-authored PRs for approval ("Approve and run" on the PR page, or
+  `gh api -X POST repos/…/actions/runs/<id>/approve`) — the required
+  `validate` check only counts once its pull_request run passes; auto-merge
+  then lands it and the `workflow_run` mirror publishes + signs. (First
+  exercised for real 2026-08-01: docker-socket-proxy, 11 fixable
+  HIGH/CRITICALs, detected→deployed in ~10 minutes.)
 - **Manual fast-track**: edit the `FROM` pin to the fixed digest yourself, PR,
   merge on green `validate` — `mirror.yml` publishes on merge. Useful when the
   fix matters but trivy can't see it (e.g. not in the vuln DB yet) or you
