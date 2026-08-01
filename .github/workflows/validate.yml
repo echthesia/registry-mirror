@@ -6,6 +6,11 @@ name: validate
 on:
   pull_request:
     paths: [Dockerfile]
+  # For PRs whose head was pushed with GITHUB_TOKEN (cve-scan's security
+  # override): those never fire pull_request workflows (anti-recursion), so
+  # the opener dispatches validate against the branch explicitly — the check
+  # run lands on the same head SHA and satisfies the required check.
+  workflow_dispatch:
 
 permissions:
   contents: read

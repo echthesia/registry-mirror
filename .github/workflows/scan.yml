@@ -1,11 +1,20 @@
 name: cve-scan
 
-# Alert-only CVE scan of the *currently pinned* (deployed) images. Trivy reports
-# only HIGH/CRITICAL vulnerabilities that have a fix available (--ignore-unfixed)
-# — i.e. "a newer upstream digest would patch a serious CVE in what noema runs."
-# Findings are surfaced as a single tracking issue (created/refreshed/closed), so
-# it never spams. This does NOT auto-deploy: bypassing the cooldown for a fix is
-# a deliberate human call — see the README "Urgent patches" runbook.
+# CVE scan of the *currently pinned* (deployed) images, plus the security
+# override: the containers equivalent of Dependabot's "security updates bypass
+# the cooldown" semantics (which Dependabot doesn't offer for docker digests).
+#
+# Trivy reports only HIGH/CRITICAL vulnerabilities that have a fix available
+# (--ignore-unfixed) — i.e. "a newer upstream digest would patch a serious CVE
+# in what noema runs." Findings are surfaced as a single tracking issue
+# (created/refreshed/closed), so it never spams.
+#
+# Override: when the upstream tag's current digest FIXES at least one of those
+# CVEs and is itself at least 24h old (a shortened soak, not none — a poisoned
+# release needs a beat to be caught/yanked), this workflow opens the same-tag
+# digest-bump PR itself instead of waiting out Dependabot's 7-day cooldown.
+# The PR auto-merges behind the required `validate` check like any Dependabot
+# bump, so nothing lands unvalidated. See the README "Urgent patches" runbook.
 
 on:
   schedule:
@@ -13,8 +22,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write         # push the override branch
   issues: write
+  pull-requests: write    # open the override PR + enable auto-merge
+  actions: write          # dispatch validate (GITHUB_TOKEN-created PRs don't
+                          # fire pull_request workflows) and mirror
 
 concurrency:
   group: cve-scan
@@ -26,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install trivy
+      - name: Install trivy and skopeo
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -36,6 +48,7 @@ jobs:
           tar -xzf /tmp/trivy/trivy_*_Linux-64bit.tar.gz -C /tmp/trivy
           sudo install /tmp/trivy/trivy /usr/local/bin/trivy
           trivy --version
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
 
       - name: Scan each pinned digest
         run: |
@@ -47,6 +60,130 @@ jobs:
               --format json --output "/tmp/scan-${name}.json" "${src_norepo}@${digest}"
             echo "::endgroup::"
           done < <(grep '^FROM ' Dockerfile)
+
+      # For every image whose PINNED digest has fixable HIGH/CRITICAL CVEs:
+      # resolve the upstream tag's CURRENT digest; if it differs, scan it too,
+      # and emit an override candidate when it (a) fixes >=1 of those CVEs and
+      # (b) its image config `created` stamp is >=24h old (shortened soak).
+      # Candidates land in /tmp/overrides.json; status notes for the tracking
+      # issue in /tmp/override-note.md.
+      - name: Detect security-override candidates
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, datetime, os
+
+          def vulns(path):
+              data = json.load(open(path))
+              out = set()
+              for r in data.get("Results") or []:
+                  for v in r.get("Vulnerabilities") or []:
+                      out.add((v.get("VulnerabilityID"), v.get("PkgName")))
+              return out
+
+          now = datetime.datetime.now(datetime.timezone.utc)
+          overrides, notes = [], []
+          for line in open("Dockerfile"):
+              if not line.startswith("FROM "):
+                  continue
+              p = line.split()
+              ref, name = p[1], p[3]
+              src_repo, pinned = ref.split("@", 1)          # docker.io/library/traefik:v3
+              src_norepo, tag = src_repo.rsplit(":", 1)
+              deployed = vulns(f"/tmp/scan-{name}.json")
+              if not deployed:
+                  continue
+              cand = json.loads(subprocess.check_output(
+                  ["skopeo", "inspect", f"docker://{src_repo}"]))["Digest"]
+              if cand == pinned:
+                  notes.append(f"- `{name}`: no newer upstream digest yet.")
+                  continue
+              subprocess.check_call(
+                  ["trivy", "image", "--quiet", "--scanners", "vuln",
+                   "--severity", "HIGH,CRITICAL", "--ignore-unfixed",
+                   "--format", "json", "--output", f"/tmp/cand-{name}.json",
+                   f"{src_norepo}@{cand}"])
+              fixed = deployed - vulns(f"/tmp/cand-{name}.json")
+              if not fixed:
+                  notes.append(f"- `{name}`: newer digest `{cand[:19]}…` fixes none of the findings.")
+                  continue
+              created_s = json.loads(subprocess.check_output(
+                  ["skopeo", "inspect", "--config", f"docker://{src_norepo}@{cand}"]
+                  )).get("created")
+              age_ok, age_h = True, None
+              if created_s:
+                  created = datetime.datetime.fromisoformat(created_s.replace("Z", "+00:00"))
+                  age_h = (now - created).total_seconds() / 3600
+                  age_ok = age_h >= 24
+              if not age_ok:
+                  notes.append(f"- `{name}`: candidate `{cand[:19]}…` fixes "
+                               f"{len(fixed)} finding(s) but is only {age_h:.0f}h old — "
+                               "override held until it clears the 24h soak.")
+                  continue
+              cves = sorted({c for c, _ in fixed})
+              overrides.append({"name": name, "tag": tag, "src": src_norepo,
+                                "old": pinned, "new": cand, "cves": cves})
+              notes.append(f"- `{name}`: **security override PR opened** — candidate "
+                           f"`{cand[:19]}…` fixes: " + ", ".join(f"`{c}`" for c in cves))
+          json.dump(overrides, open("/tmp/overrides.json", "w"))
+          if notes:
+              open("/tmp/override-note.md", "w").write(
+                  "\n### Cooldown override status\n" + "\n".join(notes) + "\n")
+          print(json.dumps(overrides, indent=2))
+          PY
+
+      # One PR per image, auto-merged behind the required validate check.
+      # validate must be dispatched explicitly: a PR created with GITHUB_TOKEN
+      # never fires pull_request workflows (anti-recursion), which would leave
+      # the required check "Expected" forever. After a merge, dispatch mirror
+      # explicitly too — the workflow_run(validate) trigger can lose the race
+      # against the merge commit and publish pre-merge main.
+      - name: Open override PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          merged_any=0
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          while read -r row; do
+            name=$(jq -r .name <<<"$row"); tag=$(jq -r .tag <<<"$row")
+            old=$(jq -r .old <<<"$row");   new=$(jq -r .new <<<"$row")
+            cves=$(jq -r '.cves | join(", ")' <<<"$row")
+            branch="security-override/${name}"
+            existing=$(gh pr list --head "$branch" --state open --json number -q '.[0].number' || true)
+            if [ -n "$existing" ]; then
+              # Re-nudge a stuck PR: re-dispatch validate on its head.
+              echo "PR #${existing} already open for ${name}; re-dispatching validate"
+              gh workflow run validate.yml --ref "$branch"
+              continue
+            fi
+            git checkout -B "$branch" origin/main
+            sed -i "s|${old}|${new}|" Dockerfile
+            git commit -a \
+              -m "mirror: security override — bump ${name} to ${new:0:19}" \
+              -m "Fixes fixable HIGH/CRITICAL CVE(s) in the deployed digest: ${cves}. Opened by cve-scan ahead of the Dependabot cooldown (candidate is >=24h old); merges only once the required validate check passes."
+            git push -f origin "$branch"
+            pr=$(gh pr create --base main --head "$branch" \
+              --title "security override: ${name} (${cves})" \
+              --body "The deployed \`${name}:${tag}\` digest has fixable HIGH/CRITICAL CVE(s) — ${cves} — fixed by the upstream candidate digest \`${new}\` (>=24h old). Same-tag digest bump, auto-merged behind \`validate\` per the README *Urgent patches* runbook." \
+              | grep -o '[0-9]*$')
+            gh pr merge --auto --squash "$pr"
+            gh workflow run validate.yml --ref "$branch"
+            # Wait for the auto-merge (validate normally takes <2 min).
+            for _ in $(seq 1 30); do
+              state=$(gh pr view "$pr" --json state -q .state)
+              [ "$state" = "MERGED" ] && { merged_any=1; break; }
+              [ "$state" = "CLOSED" ] && break
+              sleep 20
+            done
+            echo "PR #${pr} (${name}): $(gh pr view "$pr" --json state -q .state)"
+          done < <(jq -c '.[]' /tmp/overrides.json)
+          if [ "$merged_any" = 1 ]; then
+            gh workflow run mirror.yml --ref main
+          fi
+          # Later steps read the Dockerfile — put back main's copy, not the
+          # last override branch's.
+          git checkout --detach origin/main
 
       - name: Build report
         id: report
@@ -81,11 +218,15 @@ jobs:
           ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%MZ")
           if total:
               body = (f"Trivy found **{total}** fixable HIGH/CRITICAL CVE(s) in the currently-pinned "
-                      "(deployed) images. A newer upstream digest fixes these — they patch automatically "
-                      "as the 7-day cooldown releases each refresh, or fast-track now per the README "
-                      "*Urgent patches* runbook.\n\n" + "\n\n".join(sections))
+                      "(deployed) images. When an aged (>=24h) upstream digest fixes any of these, the "
+                      "cooldown override opens a bump PR automatically (see the *Cooldown override "
+                      "status* below); otherwise they patch as the 7-day cooldown releases each "
+                      "refresh, or fast-track by hand per the README *Urgent patches* runbook.\n\n"
+                      + "\n\n".join(sections))
           else:
               body = "No fixable HIGH/CRITICAL CVEs in the currently-pinned images. \U0001F389"
+          if os.path.exists("/tmp/override-note.md"):
+              body += "\n" + open("/tmp/override-note.md").read()
           body += f"\n\n_Scanned {ts} · trivy · HIGH,CRITICAL · --ignore-unfixed · re-runs daily._"
           open("/tmp/body.md", "w").write(body)
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
