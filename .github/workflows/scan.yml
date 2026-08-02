@@ -35,7 +35,14 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials MUST stay off: checkout's persisted extraheader
+      # (Authorization: basic <GITHUB_TOKEN>) overrides URL-embedded
+      # credentials on push, so the override step's PAT push would run as
+      # github-actions[bot] (contents: read) and 403. Every gh call below
+      # sets GH_TOKEN explicitly; nothing here needs the persisted token.
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install trivy and skopeo
         env:
@@ -138,7 +145,10 @@ jobs:
       # manual approval click. A user-token PR triggers validate normally,
       # and its auto-merge push fires mirror.yml's push trigger directly —
       # no dispatch hack, no workflow_run race. If this step fails with an
-      # auth error, the PAT has expired: mint a new one (see README).
+      # auth error, check WHO was denied: "denied to github-actions[bot]"
+      # means checkout's persisted credential is overriding the PAT (see the
+      # checkout step); a 401/bad-credentials means the PAT has expired —
+      # mint a new one (see README).
       - name: Open override PRs
         env:
           GH_TOKEN: ${{ secrets.MIRROR_PR_PAT }}
