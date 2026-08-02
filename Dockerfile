@@ -16,7 +16,7 @@
 # Pinned at the live noema digests as of 2026-06-13, so flipping the noema units
 # onto the mirror is a no-op. Never `docker build` this file.
 
-FROM docker.io/library/traefik:v3@sha256:652929a140a32d7cafafb13c6cdfab5376cfeff800f51397b87b524501ed02a8 AS traefik
+FROM docker.io/library/traefik:v3@sha256:9c3b91d5fb7770853ca5c1124a23c34bf2d9b47ffaebeab2614cbaf410dcb2ac AS traefik
 FROM docker.io/library/couchdb:3.4@sha256:d603d4086836b1e20f1ec35d2d38e49359639c2eb56a54c8ba0ddbdff0f3dabe AS couchdb
 FROM ghcr.io/tecnativa/docker-socket-proxy:latest@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459 AS docker-socket-proxy
 FROM docker.io/restic/rest-server:latest@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5 AS rest-server
