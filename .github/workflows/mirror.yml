@@ -36,9 +36,17 @@ concurrency:
 
 jobs:
   mirror:
-    # On workflow_run, only proceed if validate succeeded — a failed validate means
-    # the bump won't merge, so there's nothing new to publish. push/dispatch always run.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # On workflow_run, only proceed for a successful validate on a dependabot/*
+    # branch. Those are the only PRs that auto-merge under GITHUB_TOKEN and so
+    # need this chain; PAT-authored override PRs from scan.yml fire the `push`
+    # trigger on their own. The branch test matters now that validate no longer
+    # has a paths filter — without it, every passing PR check would kick off a
+    # (harmless but pointless) full mirror+sign pass over main.
+    # push/dispatch always run.
+    if: >-
+      ${{ github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'dependabot/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

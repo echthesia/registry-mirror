@@ -16,8 +16,9 @@ updates:
     # Stay on the pinned tag (:v3 / :3.4 / :latest) and only refresh its digest.
     # Tag/version bumps (traefik v3->v4, couchdb 3.4->3.5) are deliberately
     # manual — ignoring all semver update-types leaves only digest-only updates.
-    # NB confirm on the first cycle that this does NOT also suppress the digest
-    # refresh (digest updates are classified separately from semver-*).
+    # Confirmed in practice: digest updates are classified separately from
+    # semver-*, so this ignore does not suppress them. Eight digest bumps landed
+    # between 2026-06-15 and 2026-07-31 with this config in place.
     ignore:
       - dependency-name: "*"
         update-types:
