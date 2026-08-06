@@ -56,8 +56,21 @@ jobs:
       - name: Install skopeo
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
 
+      # Pin the cosign BINARY, not just the action. The action major was doing
+      # this job by accident: @v3 defaults to cosign v2.6.1, @v4 defaults to
+      # v3.0.6. cosign v3 stores signatures as OCI 1.1 referrer-attached
+      # Sigstore bundles, and c/image — what podman uses to enforce policy.json
+      # on noema — only looks for the legacy `sha256-<digest>.sig` tag. A
+      # v3-signed image is green in CI, passes `cosign verify`, and is
+      # unverifiable at pull time: noema fails closed with "A signature was
+      # required, but no signature exists" and silently keeps the old container.
+      # Not fixable by flag either — cosign v3.1 removed --new-bundle-format,
+      # and c/image has no referrers support at all. Don't unpin without
+      # re-testing a real policy-gated pull on noema.
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.6.1
 
       - name: Log in to GHCR
         run: |
