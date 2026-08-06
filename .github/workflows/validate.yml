@@ -2,10 +2,16 @@ name: validate
 
 # PR gate: every pinned digest must actually resolve upstream before we let a
 # bump merge. Cheap, and it's the required status check that gates auto-merge.
-
+#
+# No `paths:` filter, deliberately. This used to be `paths: [Dockerfile]`, which
+# deadlocked any PR that didn't touch the Dockerfile: `validate` is a REQUIRED
+# check, a filtered-out check never reports, and the PR sits at "Expected —
+# waiting for status" forever with no way to clear it. A dependabot.yml-only PR
+# hit exactly that. Dispatching the workflow by hand does NOT help — the run
+# succeeds against the right SHA and still isn't credited to the PR.
+# The job is five skopeo inspects, so running it unconditionally is nearly free.
 on:
   pull_request:
-    paths: [Dockerfile]
   # Manual nudge for a stuck branch (override PRs are PAT-authored, so their
   # pull_request runs fire on their own; this is just an operator tool).
   workflow_dispatch:
