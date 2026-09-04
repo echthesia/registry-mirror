@@ -22,6 +22,6 @@ FROM ghcr.io/tecnativa/docker-socket-proxy:latest@sha256:1f5038b54f06c3e18422902
 FROM docker.io/restic/rest-server:latest@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5 AS rest-server
 # Pinned one release behind (1.74.3) on purpose: the 1.74.4 digest was 5 days
 # old at pin time, inside the 7-day soak. Dependabot refreshes it once aged.
-FROM docker.io/rclone/rclone:latest@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548 AS rclone
+FROM docker.io/rclone/rclone:latest@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5 AS rclone
 
 # Consumer: echthesia/infra (Quadlet units pull ghcr.io/echthesia/* with AutoUpdate=registry).
