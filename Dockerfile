@@ -18,7 +18,7 @@
 
 FROM docker.io/library/traefik:v3@sha256:e9338a01a43389362bdef90afd4ff4a30dd6c0a2e1b0ce00c5e0f52659aa2d9c AS traefik
 FROM docker.io/library/couchdb:3.4@sha256:d9b6609989f1d47822e84005946cecc2fd49e4be5e4f35da960d4379f6c60de0 AS couchdb
-FROM ghcr.io/tecnativa/docker-socket-proxy:latest@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459 AS docker-socket-proxy
+FROM ghcr.io/tecnativa/docker-socket-proxy:latest@sha256:fd989c12c74edb8424f53f31a2054459f286967c93e113e91ea95432f066493b AS docker-socket-proxy
 FROM docker.io/restic/rest-server:latest@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5 AS rest-server
 # Pinned one release behind (1.74.3) on purpose: the 1.74.4 digest was 5 days
 # old at pin time, inside the 7-day soak. Dependabot refreshes it once aged.
