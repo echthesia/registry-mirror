@@ -161,6 +161,13 @@ jobs:
             name=$(jq -r .name <<<"$row"); tag=$(jq -r .tag <<<"$row")
             old=$(jq -r .old <<<"$row");   new=$(jq -r .new <<<"$row")
             cves=$(jq -r '.cves | join(", ")' <<<"$row")
+            # GitHub caps PR titles at 256 chars; a big rebase can fix dozens
+            # of CVEs, so the title names a count once the list won't fit.
+            # The full list stays in the commit message and PR body.
+            title="security override: ${name} (${cves})"
+            if [ "${#title}" -gt 200 ]; then
+              title="security override: ${name} ($(jq -r '.cves | length' <<<"$row") CVEs)"
+            fi
             branch="security-override/${name}"
             existing=$(gh pr list --head "$branch" --state open --json number -q '.[0].number' || true)
             if [ -n "$existing" ]; then
@@ -177,7 +184,7 @@ jobs:
               -m "Fixes fixable HIGH/CRITICAL CVE(s) in the deployed digest: ${cves}. Opened by cve-scan ahead of the Dependabot cooldown (candidate is >=24h old); merges only once the required validate check passes."
             git push -f "$push_url" "$branch"
             pr=$(gh pr create --base main --head "$branch" \
-              --title "security override: ${name} (${cves})" \
+              --title "${title}" \
               --body "The deployed \`${name}:${tag}\` digest has fixable HIGH/CRITICAL CVE(s) — ${cves} — fixed by the upstream candidate digest \`${new}\` (>=24h old). Same-tag digest bump, auto-merged behind \`validate\` per the README *Urgent patches* runbook." \
               | grep -o '[0-9]*$')
             gh pr merge --auto --squash "$pr"
